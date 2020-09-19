@@ -1,2 +1,2 @@
 # CloudFormation-VPC
-CloudFormation VPC
+ cloudacademy lab
