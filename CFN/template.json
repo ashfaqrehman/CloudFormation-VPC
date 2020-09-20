@@ -22,17 +22,52 @@
             "Description": "The number of queries per second the table should support.",
             "Default": 10
         },
+        "VPCClassBOctet": {
+            "Type": "Number",
+            "Description": "The Class B block to use for the VPC (0-255).",
+            "MaxValue": 255,
+            "MinValue": 0,
+            "Default": 0
+        },
         "RunNumber": {
             "Type": "Number",
-            "Description": "Used to force the ASG's nodes' UserData to update",
-            "Default": "1"
+            "Description": "Used to force the ASG's nodes' UserData to update.",
+            "Default": 1
+        }
+    },
+    "Mappings": {
+        "AWSNATAMIs": {
+            "us-east-1":        { "AMI": "ami-303b1458" },
+            "us-west-2":        { "AMI": "ami-69ae8259" },
+            "us-west-1":        { "AMI": "ami-7da94839" },
+            "eu-west-1":        { "AMI": "ami-6975eb1e" },
+            "eu-central-1":     { "AMI": "ami-46073a5b" },
+            "ap-southeast-1":   { "AMI": "ami-b49dace6" },
+            "ap-northeast-1":   { "AMI": "ami-03cf3903" },
+            "ap-southeast-2":   { "AMI": "ami-e7ee9edd" },
+            "sa-east-1":        { "AMI": "ami-fbfa41e6" }
+        },
+        "AWSLinuxAMIs": {
+            "us-east-1":        { "AMI": "ami-1ecae776" },
+            "us-west-2":        { "AMI": "ami-e7527ed7" },
+            "us-west-1":        { "AMI": "ami-d114f295" },
+            "eu-west-1":        { "AMI": "ami-a10897d6" },
+            "eu-central-1":     { "AMI": "ami-a8221fb5" },
+            "ap-northeast-1":   { "AMI": "ami-cbf90ecb" },
+            "ap-southeast-1":   { "AMI": "ami-68d8e93a" },
+            "ap-southeast-2":   { "AMI": "ami-fd9cecc7" },
+            "sa-east-1":        { "AMI": "ami-b52890a8" }
         }
     },
     "Resources": {
         "VPC": {
             "Type": "AWS::EC2::VPC",
             "Properties": {
-                "CidrBlock": "10.0.0.0/16"
+                "CidrBlock": { "Fn::Join": [ "", [
+                    "10.",
+                    { "Ref": "VPCClassBOctet" },
+                    ".0.0/16"
+                ]]}
             }
         },
         "PublicSubnet": {
@@ -42,7 +77,11 @@
             "Type": "AWS::EC2::Subnet",
             "Properties": {
                 "AvailabilityZone": { "Ref": "VPCAZ" },
-                "CidrBlock": "10.0.0.0/24",
+                "CidrBlock": { "Fn::Join": [ "", [
+                    "10.",
+                    { "Ref": "VPCClassBOctet" },
+                    ".0.0/24"
+                ]]},
                 "MapPublicIpOnLaunch" : true,
                 "VpcId": { "Ref": "VPC" }
             }
@@ -54,7 +93,11 @@
             "Type": "AWS::EC2::Subnet",
             "Properties": {
                 "AvailabilityZone": { "Ref": "VPCAZ" },
-                "CidrBlock": "10.0.1.0/24",
+                "CidrBlock": { "Fn::Join": [ "", [
+                    "10.",
+                    { "Ref": "VPCClassBOctet" },
+                    ".1.0/24"
+                ]]},
                 "VpcId": { "Ref": "VPC" }
             }
         },
@@ -71,7 +114,13 @@
             "Type": "AWS::EC2::Instance",
             "Properties": {
                 "AvailabilityZone": { "Ref": "VPCAZ" },
-                "ImageId": "??????",
+                "ImageId": {
+                    "Fn::FindInMap": [
+                        "AWSNATAMIs",
+                        { "Ref": "AWS::Region" },
+                        "AMI"
+                    ]
+                },
                 "InstanceType": "m3.medium",
                 "SecurityGroupIds": [
                     { "Ref": "InstancesToNATSecurityGroup" }
@@ -248,7 +297,8 @@
             "DependsOn": [
                 "InstancesConfig",
                 "LoadBalancer",
-                "PrivateSubnet"
+                "PrivateSubnet",
+                "RouteToNat"
             ],
             "Type": "AWS::AutoScaling::AutoScalingGroup",
             "Properties": {
@@ -267,7 +317,7 @@
                 "AutoScalingRollingUpdate": {
                     "MaxBatchSize": 1,
                     "MinInstancesInService": 1,
-                    "PauseTime": 30,
+                    "PauseTime": "PT1M01S",
                     "WaitOnResourceSignals": false
                 }
             }
@@ -281,7 +331,13 @@
             "Properties": {
                 "AssociatePublicIpAddress": false,
                 "IamInstanceProfile": { "Ref": "DynamoAccessInstanceProfile" },
-                "ImageId": "??????",
+                "ImageId": {
+                    "Fn::FindInMap": [
+                        "AWSLinuxAMIs",
+                        { "Ref": "AWS::Region" },
+                        "AMI"
+                    ]
+                },
                 "InstanceMonitoring": true,
                 "InstanceType": { "Ref": "NodeSize" },
                 "SecurityGroups": [{ "Ref": "LBToInstancesSecurityGroup" }],
@@ -325,11 +381,121 @@
             }
         },
 
-        "DynamoAccessRole": {},
-        "DynamoAccessInstanceProfile": {},
+        "DynamoAccessRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                        "Effect": "Allow",
+                        "Principal": { "Service": [ "ec2.amazonaws.com" ]},
+                        "Action": [ "sts:AssumeRole" ]
+                    }]
+                },
+                "Path": "/",
+                "ManagedPolicyArns": ["arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"]
+            }
+        },
+        "DynamoAccessInstanceProfile": {
+            "DependsOn": [
+                "DynamoAccessRole"
+            ],
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [{ "Ref": "DynamoAccessRole" }]
+            }
+        },
 
-        "LBToInstancesSecurityGroup": {},
-        "InternetToLBSecurityGroup": {},
-        "InstancesToNATSecurityGroup": {}
+        "LBToInstancesSecurityGroup": {
+            "DependsOn": [
+                "InternetToLBSecurityGroup"
+            ],
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Allows LB to hit instances and instances to NAT",
+                "SecurityGroupEgress": [{
+                    "CidrIp": "0.0.0.0/0",
+                    "FromPort": 0,
+                    "IpProtocol": "-1",
+                    "ToPort": 65535
+                }],
+                "SecurityGroupIngress": [{
+                    "FromPort": 8888,
+                    "IpProtocol": "TCP",
+                    "SourceSecurityGroupId": { "Ref": "InternetToLBSecurityGroup" },
+                    "ToPort": 8888
+                },
+                {
+                    "FromPort": 22,
+                    "IpProtocol": "TCP",
+                    "CidrIp": "0.0.0.0/0",
+                    "ToPort": 22
+                }],
+                "VpcId": { "Ref": "VPC" }
+            }
+        },
+        "InternetToLBSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Allows the internet to hit the LB.",
+                "SecurityGroupIngress": [{
+                    "CidrIp": "0.0.0.0/0",
+                    "FromPort": 80,
+                    "IpProtocol": "TCP",
+                    "ToPort": 80
+                }],
+                "VpcId": { "Ref": "VPC" }
+            }
+        },
+        "InstancesToNATSecurityGroup": {
+            "DependsOn": [
+                "LBToInstancesSecurityGroup"
+            ],
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Allows the instance to hit NAT, and NAT outbound.",
+                "SecurityGroupEgress": [{
+                    "CidrIp": "0.0.0.0/0",
+                    "FromPort": 0,
+                    "IpProtocol": "-1",
+                    "ToPort": 65535
+                }],
+                "SecurityGroupIngress": [{
+                    "FromPort": 0,
+                    "IpProtocol": "-1",
+                    "SourceSecurityGroupId": { "Ref": "LBToInstancesSecurityGroup" },
+                    "ToPort": 65535
+                }, {
+                    "FromPort": 22,
+                    "IpProtocol": "TCP",
+                    "CidrIp": "0.0.0.0/0",
+                    "ToPort": 22
+                }],
+                "VpcId": { "Ref": "VPC" }
+            }
+        }
+    },
+    "Outputs": {
+        "ELBDNS": {
+            "Description": "The DNS for the ELB / our app.",
+            "Value": {
+                "Fn::Join": [
+                    "",
+                    [
+                        "http://",
+                        {
+                            "Fn::GetAtt": [
+                                "LoadBalancer",
+                                "DNSName"
+                            ]
+                        },
+                        "/index.html"
+                    ]
+                ]
+
+            }
+        }
     }
 }
+All Done, Yay!
