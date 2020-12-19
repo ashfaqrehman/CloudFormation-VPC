@@ -1,7 +1,7 @@
 # CloudFormation-VPC
  cloudacademy lab
  
- AWS CloudFormation can be used to automatically provision your AWS resources across multiple accounts and regions all from a simple text file. 
+ AWS CloudFormation stack is	a set of AWS resources that you can provision, update, or delete all at once 
  
  The CloudFormation template will describe all of your resources that you need, and their configurations without having to worry about service dependency.
 
